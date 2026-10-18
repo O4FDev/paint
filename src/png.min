@@ -1,0 +1,90 @@
+// PNG + zlib + fixed-Huffman LZ77, written entirely in Minyar.
+record Bits { data: Bytes; buffer: Integer; count: Integer }
+function bits(writer: Bits, value: Integer, count: Integer) {
+    writer.buffer = writer.buffer | (value << writer.count); writer.count += count
+    while writer.count >= 8 { writer.data.add(writer.buffer & 255); writer.buffer = writer.buffer >> 8; writer.count -= 8 }
+}
+function reverse(value: Integer, count: Integer): Integer {
+    let result = 0; let remaining = value
+    for index in 0..count { result = (result << 1) | (remaining & 1); remaining = remaining >> 1 }
+    return result
+}
+function symbol(writer: Bits, value: Integer) {
+    if value < 144 { bits(writer, reverse(value + 48, 8), 8) }
+    else if value < 256 { bits(writer, reverse(value + 256, 9), 9) }
+    else if value < 280 { bits(writer, reverse(value - 256, 7), 7) }
+    else { bits(writer, reverse(value - 88, 8), 8) }
+}
+function big32(bytes: Bytes, value: Integer) { bytes.add((value >> 24) & 255); bytes.add((value >> 16) & 255); bytes.add((value >> 8) & 255); bytes.add(value & 255) }
+function crc32(data: Bytes): Integer {
+    let table: List<Integer> = []
+    for value in 0..256 {
+        let code = value
+        for bit in 0..8 { if (code & 1) != 0 { code = (code >> 1) ^ 0xedb88320 } else { code = code >> 1 } }
+        table.add(code)
+    }
+    let crc = 0xffffffff
+    for value in data { crc = (crc >> 8) ^ table[(crc ^ value) & 255] }
+    return crc ^ 0xffffffff
+}
+function chunk(output: Bytes, name: Text, data: Bytes) {
+    big32(output, data.length); let payload = Bytes(name); payload.addBytes(data); output.addBytes(payload); big32(output, crc32(payload))
+}
+function hash(data: Bytes, position: Integer): Integer { return ((data[position] * 251 + data[position + 1]) * 251 + data[position + 2]) & 65535 }
+function compress(data: Bytes): Bytes {
+    let writer = Bits { data: Bytes(); buffer: 0; count: 0 }
+    writer.data.add(0x78); writer.data.add(0x01); bits(writer, 3, 3)
+    let previous: List<Integer> = []
+    for index in 0..65536 { previous.add(-1) }
+    let bases = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+    let extras = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+    let distances = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
+    let position = 0
+    while position < data.length {
+        let matched = 0; let distance = 0
+        if position + 2 < data.length {
+            let key = hash(data, position); let candidate = previous[key]; previous[key] = position
+            if candidate >= 0 && position - candidate <= 32768 {
+                while matched < 258 && position + matched < data.length && data[candidate + matched] == data[position + matched] { matched += 1 }
+                distance = position - candidate
+            }
+        }
+        if matched < 3 { symbol(writer, data[position]); position += 1 }
+        else {
+            let code = 0
+            while code + 1 < bases.length && bases[code + 1] <= matched { code += 1 }
+            symbol(writer, 257 + code); bits(writer, matched - bases[code], extras[code])
+            let d = 0
+            while d + 1 < distances.length && distances[d + 1] <= distance { d += 1 }
+            bits(writer, reverse(d, 5), 5)
+            let extra = 0
+            if d >= 4 { extra = d / 2 - 1 }
+            bits(writer, distance - distances[d], extra)
+            for offset in 1..matched { if position + offset + 2 < data.length { previous[hash(data, position + offset)] = position + offset } }
+            position += matched
+        }
+    }
+    symbol(writer, 256)
+    if writer.count > 0 { writer.data.add(writer.buffer & 255) }
+    let a = 1; let b = 0
+    for value in data { a = (a + value) % 65521; b = (b + a) % 65521 }
+    big32(writer.data, (b << 16) | a); return writer.data
+}
+public function encode(width: Integer, height: Integer, pixels: Bytes): Bytes {
+    if width < 1 || height < 1 || pixels.length != width * height * 4 { fail("paint: PNG needs one RGBA pixel per coordinate") }
+    let scanlines = Bytes()
+    for y in 0..height {
+        scanlines.add(1) // PNG Sub filtering improves compression of gradients.
+        for x in 0..(width * 4) {
+            let value = pixels[y * width * 4 + x]
+            if x >= 4 { value = (value - pixels[y * width * 4 + x - 4] + 256) & 255 }
+            scanlines.add(value)
+        }
+    }
+    let output = Bytes()
+    for value in [137, 80, 78, 71, 13, 10, 26, 10] { output.add(value) }
+    let header = Bytes(); big32(header, width); big32(header, height)
+    for value in [8, 6, 0, 0, 0] { header.add(value) }
+    chunk(output, "IHDR", header); chunk(output, "IDAT", compress(scanlines)); chunk(output, "IEND", Bytes())
+    return output
+}

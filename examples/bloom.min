@@ -1,0 +1,28 @@
+use "paint" as paint
+use "math" as math
+
+let art = paint.canvas(720, 900)
+paint.clear(art, paint.rgb(0x152c37))
+let font = paint.loadFont("assets/CormorantGaramond.ttf")
+paint.text(art, font, "The shape of light", 52.0, 93.0, 49.0, paint.rgb(0xf2dfb9))
+paint.text(art, font, "One curve, twenty-four possibilities.", 55.0, 125.0, 20.0, paint.rgb(0x9fb4af))
+let petal = paint.path()
+paint.moveTo(petal, 0.0, -246.0)
+paint.cubicTo(petal, 168.0, -232.0, 214.0, -62.0, 8.0, 72.0)
+paint.cubicTo(petal, 92.0, -27.0, 40.0, -170.0, 0.0, -246.0)
+paint.close(petal)
+let colors = [0xe4bc86, 0xcea17a, 0x96b4a3, 0x619e9c, 0x4c858e, 0xb78771]
+for index in 0..24 {
+    let angle = Float(index) * 3.141592653589793 / 12.0
+    let cosine = math.cos(angle); let sine = math.sin(angle)
+    let leaf = paint.transformed(petal, cosine, sine, -sine, cosine, 360.0, 465.0)
+    paint.fillGradient(art, leaf, paint.linear(360.0, 465.0, 360.0 - sine * 246.0, 465.0 - cosine * 246.0, paint.rgb(0x234c58), paint.rgb(colors[index % colors.length])))
+}
+paint.fill(art, paint.circle(360.0, 465.0, 36.0), paint.rgb(0x152c37))
+paint.fill(art, paint.circle(360.0, 465.0, 4.0), paint.rgb(0xf4d7a6))
+let rules = paint.path(); paint.moveTo(rules, 52.0, 772.0); paint.lineTo(rules, 668.0, 772.0)
+paint.stroke(art, rules, 0.6, paint.opacity(paint.rgb(0x9fb4af), 0.5))
+paint.text(art, font, "PAINT  /  003", 53.0, 823.0, 17.0, paint.rgb(0xe4bc86))
+paint.text(art, font, "Small functions. Infinite gardens.", 412.0, 823.0, 18.0, paint.rgb(0xbac6b7))
+paint.writePng(art, "gallery/bloom.png"); paint.writeSvg(art, "gallery/bloom.svg")
+print("bloom · 720 × 900 · PNG + SVG")

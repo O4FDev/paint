@@ -1,0 +1,6 @@
+/target/
+/.minyar-home/
+/.mirror/
+/target-*
+/gallery/*.log
+__pycache__/

@@ -1,0 +1,32 @@
+use "paint" as paint
+use "math" as math
+
+let art = paint.canvas(720, 900)
+paint.clear(art, paint.rgb(0xf2eddf))
+let font = paint.loadFont("assets/CormorantGaramond.ttf")
+paint.text(art, font, "Tidal studies", 49.0, 93.0, 55.0, paint.rgb(0x153c45))
+paint.text(art, font, "Fifty-four lines finding their own way.", 52.0, 124.0, 20.0, paint.rgb(0x526f70))
+paint.fillGradient(art, paint.rectangle(48.0, 168.0, 624.0, 624.0), paint.linear(48.0, 168.0, 672.0, 792.0, paint.rgb(0x174654), paint.rgb(0x0d2937)))
+let contours = paint.path()
+for row in 0..54 {
+    let base = 202.0 + Float(row) * 10.3
+    for step in 0..101 {
+        let t = Float(step) / 100.0
+        let envelope = math.sin(t * 3.141592653589793)
+        let wave = math.sin(t * 7.8 + Float(row) * 0.07) * envelope * 69.0
+        let x = 64.0 + 592.0 * t
+        let y = base + wave
+        if step == 0 { paint.moveTo(contours, x, y) } else { paint.lineTo(contours, x, y) }
+    }
+}
+paint.stroke(art, contours, 0.8, paint.opacity(paint.rgb(0xb2cabb), 0.75))
+let ribbon = paint.path()
+paint.moveTo(ribbon, 64.0, 524.0)
+paint.cubicTo(ribbon, 205.0, 687.0, 413.0, 261.0, 656.0, 451.0)
+paint.cubicTo(ribbon, 424.0, 294.0, 215.0, 715.0, 64.0, 554.0)
+paint.close(ribbon)
+paint.fillGradient(art, ribbon, paint.linear(64.0, 500.0, 656.0, 440.0, paint.rgb(0xc68867), paint.rgb(0xf1d6a8)))
+paint.text(art, font, "PAINT  /  002", 50.0, 843.0, 17.0, paint.rgb(0x153c45))
+paint.text(art, font, "Geometry has a gentle side.", 461.0, 843.0, 18.0, paint.rgb(0x153c45))
+paint.writePng(art, "gallery/tidal.png"); paint.writeSvg(art, "gallery/tidal.svg")
+print("tidal · 720 × 900 · PNG + SVG")

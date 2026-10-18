@@ -1,0 +1,17 @@
+use "paint" as paint
+use "io" as io
+
+let font = paint.loadFont("assets/CormorantGaramond.ttf")
+let narrow = paint.textWidth(font, "iii", 32.0)
+let wide = paint.textWidth(font, "WWW", 32.0)
+if !(narrow > 0.0 && wide > narrow * 2.0) { fail("TrueType advances") }
+if abs(paint.textWidth(font, "After", 64.0) - paint.textWidth(font, "After", 32.0) * 2.0) > 0.00001 { fail("text size scales linearly") }
+let art = paint.canvas(280, 90)
+paint.clear(art, paint.rgb(0xffffff))
+paint.text(art, font, "Café · Ångström", 8.0, 59.0, 32.0, paint.rgb(0x163c45))
+let pixels = paint.pixels(art)
+let changed = 0
+for index in 0..(280 * 90) { if pixels[index * 4] < 240 { changed += 1 } }
+if changed < 200 || changed > 6000 { fail("TrueType simple and composite outlines") }
+if paint.pngBytes(art).length < 100 { fail("text PNG output") }
+print("paint TrueType passed")

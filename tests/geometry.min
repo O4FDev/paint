@@ -1,0 +1,28 @@
+use "paint" as paint
+
+function check(condition: Boolean, message: Text) { if !condition { fail(message) } }
+let image = paint.canvasWithSamples(8, 8, 4)
+paint.clear(image, paint.rgba(0.0, 0.0, 0.0, 0.0))
+paint.fill(image, paint.rectangle(2.0, 2.0, 4.0, 4.0), paint.rgb(0xff0000))
+let pixels = paint.pixels(image)
+check(pixels[(3 * 8 + 3) * 4] == 255 && pixels[(3 * 8 + 3) * 4 + 3] == 255, "opaque interior")
+check(pixels[3] == 0, "transparent exterior")
+paint.fill(image, paint.rectangle(2.0, 2.0, 4.0, 4.0), paint.opacity(paint.rgb(0x0000ff), 0.5))
+let mixed = paint.pixels(image)
+check(mixed[(3 * 8 + 3) * 4] == 128 && mixed[(3 * 8 + 3) * 4 + 2] == 128, "source-over blend")
+let triangle = paint.path(); paint.moveTo(triangle, 0.2, 0.2); paint.lineTo(triangle, 7.8, 0.2); paint.lineTo(triangle, 0.2, 7.8); paint.close(triangle)
+paint.clear(image, paint.rgba(0.0, 0.0, 0.0, 0.0)); paint.fill(image, triangle, paint.rgb(0xffffff))
+let antialias = paint.pixels(image)
+check(antialias[3] > 0 && antialias[3] < 255, "subpixel coverage")
+let donut = paint.circle(4.0, 4.0, 3.5)
+// Separate contours in one path use an even-odd fill rule.
+paint.moveTo(donut, 3.0, 3.0); paint.lineTo(donut, 5.0, 3.0); paint.lineTo(donut, 5.0, 5.0); paint.lineTo(donut, 3.0, 5.0); paint.close(donut)
+paint.clear(image, paint.rgba(0.0, 0.0, 0.0, 0.0)); paint.fill(image, donut, paint.rgb(0xffffff))
+check(paint.pixels(image)[(4 * 8 + 4) * 4 + 3] == 0, "holes")
+let line = paint.path(); paint.moveTo(line, 1.0, 4.0); paint.lineTo(line, 4.0, 4.0); paint.lineTo(line, 7.0, 4.0)
+paint.clear(image, paint.rgba(0.0, 0.0, 0.0, 0.0)); paint.stroke(image, line, 2.0, paint.opacity(paint.rgb(0xffffff), 0.5))
+check(paint.pixels(image)[(4 * 8 + 4) * 4 + 3] == 128, "translucent stroke joins composite once")
+let png = paint.pngBytes(image)
+check(png[0] == 137 && png[1] == 80 && png[2] == 78 && png[3] == 71, "PNG signature")
+check(png[png.length - 8] == 73 && png[png.length - 7] == 69, "PNG terminal chunk")
+print("paint geometry passed")

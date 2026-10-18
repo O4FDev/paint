@@ -1,0 +1,51 @@
+use "paint" as paint
+use "math" as math
+
+let art = paint.canvas(1080, 720)
+paint.clear(art, paint.rgb(0xf4eddf))
+paint.fillGradient(art, paint.rectangle(36.0, 36.0, 1008.0, 648.0), paint.linear(0.0, 36.0, 0.0, 684.0, paint.rgb(0x182639), paint.rgb(0x557e85)))
+// A warm disc hangs between the mountain and its reflection.
+paint.fillGradient(art, paint.circle(722.0, 254.0, 135.0), paint.linear(0.0, 119.0, 0.0, 389.0, paint.rgb(0xffe3a3), paint.rgb(0xe39b73)))
+let ridge = paint.path()
+paint.moveTo(ridge, 36.0, 390.0)
+paint.cubicTo(ridge, 184.0, 323.0, 190.0, 183.0, 317.0, 204.0)
+paint.cubicTo(ridge, 420.0, 220.0, 455.0, 373.0, 573.0, 346.0)
+paint.cubicTo(ridge, 670.0, 326.0, 728.0, 386.0, 817.0, 341.0)
+paint.cubicTo(ridge, 903.0, 297.0, 975.0, 319.0, 1044.0, 292.0)
+paint.lineTo(ridge, 1044.0, 684.0); paint.lineTo(ridge, 36.0, 684.0); paint.close(ridge)
+paint.fillGradient(art, ridge, paint.linear(0.0, 200.0, 0.0, 684.0, paint.rgb(0x102b39), paint.rgb(0x39696b)))
+let river = paint.path()
+paint.moveTo(river, 36.0, 511.0)
+paint.cubicTo(river, 190.0, 418.0, 386.0, 527.0, 523.0, 448.0)
+paint.cubicTo(river, 654.0, 371.0, 856.0, 420.0, 1044.0, 379.0)
+paint.lineTo(river, 1044.0, 684.0); paint.lineTo(river, 36.0, 684.0); paint.close(river)
+paint.fillGradient(art, river, paint.linear(150.0, 380.0, 850.0, 720.0, paint.rgb(0x91b6ad), paint.rgb(0x244c61)))
+// Contour ribbons use a single translucent stroke, preserving quiet joins.
+let ripples = paint.path()
+for row in 0..24 {
+    let y = 480.0 + Float(row) * 8.0
+    paint.moveTo(ripples, 47.0, y + 21.0 * math.sin(Float(row) * 0.45))
+    paint.cubicTo(ripples, 300.0, y - 67.0, 633.0, y + 20.0, 1032.0, y - 76.0)
+}
+paint.stroke(art, ripples, 0.7, paint.opacity(paint.rgb(0xf5e9c5), 0.32))
+let current = paint.path()
+paint.moveTo(current, 36.0, 634.0)
+paint.cubicTo(current, 220.0, 557.0, 331.0, 623.0, 520.0, 561.0)
+paint.cubicTo(current, 714.0, 496.0, 872.0, 571.0, 1044.0, 474.0)
+paint.lineTo(current, 1044.0, 684.0); paint.lineTo(current, 36.0, 684.0); paint.close(current)
+paint.fillGradient(art, current, paint.linear(100.0, 550.0, 1050.0, 680.0, paint.rgb(0xcf8d6d), paint.rgb(0xe8c99e)))
+let birds = paint.path()
+for index in 0..7 {
+    let x = 475.0 + Float(index) * 21.0; let y = 160.0 + 14.0 * math.sin(Float(index) * 0.8)
+    paint.moveTo(birds, x - 5.0, y + 2.0); paint.quadraticTo(birds, x - 2.0, y - 3.0, x, y)
+    paint.quadraticTo(birds, x + 3.0, y - 4.0, x + 7.0, y - 1.0)
+}
+paint.stroke(art, birds, 1.2, paint.rgb(0x122b3c))
+let font = paint.loadFont("assets/CormorantGaramond.ttf")
+paint.text(art, font, "After the rain", 76.0, 120.0, 51.0, paint.rgb(0xf4eddf))
+paint.text(art, font, "A study in quiet currents", 79.0, 148.0, 19.0, paint.opacity(paint.rgb(0xf4eddf), 0.7))
+paint.text(art, font, "PAINT  /  001", 77.0, 653.0, 17.0, paint.rgb(0x18313e))
+paint.text(art, font, "Made of paths, light and Minyar.", 724.0, 653.0, 17.0, paint.rgb(0x18313e))
+paint.writePng(art, "gallery/after-rain.png")
+paint.writeSvg(art, "gallery/after-rain.svg")
+print("after-rain · 1080 × 720 · PNG + SVG")

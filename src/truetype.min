@@ -1,0 +1,182 @@
+// TrueType outlines only: hinting instructions are data and never executed.
+use "io" as io
+
+public record Font { private data: Bytes; private units: Integer; private glyphs: Integer; private metrics: Integer; private hmtx: Integer; private loca: Integer; private glyf: Integer; private longOffsets: Boolean; private cmap: Integer; private format: Integer }
+public record Outline { codes: List<Integer>; xs: List<Float>; ys: List<Float>; controlXs: List<Float>; controlYs: List<Float> }
+record Point { x: Float; y: Float; on: Boolean }
+function u16(data: Bytes, offset: Integer): Integer {
+    if offset < 0 || offset > data.length - 2 { fail("paint: truncated TrueType font") }
+    return data[offset] * 256 + data[offset + 1]
+}
+function i16(data: Bytes, offset: Integer): Integer { let value = u16(data, offset); if value >= 32768 { return value - 65536 }; return value }
+function u32(data: Bytes, offset: Integer): Integer { return u16(data, offset) * 65536 + u16(data, offset + 2) }
+function i8(data: Bytes, offset: Integer): Integer { let value = data[offset]; if value >= 128 { return value - 256 }; return value }
+function table(data: Bytes, name: Text): Integer {
+    let count = u16(data, 4)
+    if count > 256 { fail("paint: excessive TrueType table count") }
+    for index in 0..count {
+        let record = 12 + index * 16
+        if Text(data.slice(record, record + 4)) == name {
+            let offset = u32(data, record + 8); let length = u32(data, record + 12)
+            if offset > data.length || length > data.length - offset { fail("paint: TrueType table exceeds the file") }
+            return offset
+        }
+    }
+    fail("paint: TrueType font needs the " + name + " table (CFF/OTF outlines are not supported)")
+    return 0
+}
+public function load(path: Text): Font {
+    let data = io.readBytesFile(path)
+    if data.length < 12 || data.length > 67108864 || u32(data, 0) != 65536 { fail("paint: expected a single TrueType .ttf font, at most 64 MiB") }
+    let head = table(data, "head"); let hhea = table(data, "hhea"); let maxp = table(data, "maxp")
+    let units = u16(data, head + 18); let glyphs = u16(data, maxp + 4); let metrics = u16(data, hhea + 34)
+    if units < 16 || units > 16384 || metrics < 1 || metrics > glyphs { fail("paint: invalid TrueType metrics") }
+    let indexFormat = i16(data, head + 50)
+    if indexFormat != 0 && indexFormat != 1 { fail("paint: unsupported TrueType location format") }
+    let cmap = table(data, "cmap"); let selected = 0; let format = 0
+    let records = u16(data, cmap + 2)
+    if records > 256 { fail("paint: excessive TrueType cmap count") }
+    for index in 0..records {
+        let record = cmap + 4 + index * 8
+        let platform = u16(data, record); let encoding = u16(data, record + 2)
+        if platform == 0 || (platform == 3 && (encoding == 1 || encoding == 10)) {
+            let offset = cmap + u32(data, record + 4); let kind = u16(data, offset)
+            if kind == 12 || (kind == 4 && format == 0) { selected = offset; format = kind }
+        }
+    }
+    if format == 0 { fail("paint: TrueType font needs Unicode cmap format 4 or 12") }
+    return Font { data: data; units: units; glyphs: glyphs; metrics: metrics; hmtx: table(data, "hmtx"); loca: table(data, "loca"); glyf: table(data, "glyf"); longOffsets: indexFormat == 1; cmap: selected; format: format }
+}
+function glyphIndex(font: Font, code: Integer): Integer {
+    let data = font.data; let start = font.cmap
+    if font.format == 12 {
+        let groups = u32(data, start + 12)
+        if groups > 100000 { fail("paint: excessive TrueType cmap groups") }
+        let low = 0; let high = groups
+        while low < high {
+            let middle = low + (high - low) / 2; let group = start + 16 + middle * 12
+            let first = u32(data, group); let last = u32(data, group + 4)
+            if code < first { high = middle }
+            else if code > last { low = middle + 1 }
+            else { return u32(data, group + 8) + code - first }
+        }
+        return 0
+    }
+    if code > 65535 { return 0 }
+    let segments = u16(data, start + 6) / 2
+    for index in 0..segments {
+        let last = u16(data, start + 14 + index * 2)
+        if code > last { continue }
+        let first = u16(data, start + 16 + segments * 2 + index * 2)
+        if code < first { return 0 }
+        let delta = i16(data, start + 16 + segments * 4 + index * 2)
+        let position = start + 16 + segments * 6 + index * 2
+        let range = u16(data, position)
+        if range == 0 { return (code + delta) & 65535 }
+        let glyph = u16(data, position + range + (code - first) * 2)
+        if glyph != 0 { glyph = (glyph + delta) & 65535 }
+        return glyph
+    }
+    return 0
+}
+function advance(font: Font, glyph: Integer): Integer { return u16(font.data, font.hmtx + min(glyph, font.metrics - 1) * 4) }
+function emit(result: Outline, code: Integer, point: Point, control: Point) {
+    if result.codes.length >= 1000000 { fail("paint: text outline exceeds one million points") }
+    result.codes.add(code); result.xs.add(point.x); result.ys.add(point.y); result.controlXs.add(control.x); result.controlYs.add(control.y)
+}
+function midpoint(a: Point, b: Point): Point { return Point { x: (a.x + b.x) * 0.5; y: (a.y + b.y) * 0.5; on: true } }
+function drawContour(result: Outline, points: List<Point>, first: Integer, last: Integer) {
+    let start = points[first]; let position = first + 1; let stop = last + 1
+    if !start.on {
+        if points[last].on { start = points[last]; position = first; stop = last }
+        else { start = midpoint(points[last], start); position = first }
+    }
+    emit(result, 0, start, start)
+    while position < stop {
+        let current = points[position]
+        if current.on { emit(result, 1, current, current); position += 1 }
+        else {
+            let next = start
+            if position + 1 < stop { next = points[position + 1] }
+            if next.on { emit(result, 2, next, current); position += 2 }
+            else { emit(result, 2, midpoint(current, next), current); position += 1 }
+        }
+    }
+    emit(result, 3, start, start)
+}
+function glyphOutline(font: Font, glyph: Integer, a: Float, b: Float, c: Float, d: Float, tx: Float, ty: Float, result: Outline, depth: Integer) {
+    if depth > 12 || glyph < 0 || glyph >= font.glyphs { fail("paint: invalid or recursive TrueType glyph") }
+    let data = font.data
+    let offset = u16(data, font.loca + glyph * 2) * 2; let nextOffset = u16(data, font.loca + (glyph + 1) * 2) * 2
+    if font.longOffsets { offset = u32(data, font.loca + glyph * 4); nextOffset = u32(data, font.loca + (glyph + 1) * 4) }
+    if offset == nextOffset { return }
+    if offset > nextOffset || nextOffset > data.length - font.glyf { fail("paint: invalid TrueType glyph location") }
+    let start = font.glyf + offset; let contours = i16(data, start); let position = start + 10
+    if contours == -1 {
+        let more = true
+        while more {
+            let flags = u16(data, position); let component = u16(data, position + 2); position += 4
+            let x = 0; let y = 0
+            if (flags & 1) != 0 { x = i16(data, position); y = i16(data, position + 2); position += 4 }
+            else { x = i8(data, position); y = i8(data, position + 1); position += 2 }
+            if (flags & 2) == 0 { fail("paint: TrueType point-attached composite glyphs are not supported") }
+            let ca = 1.0; let cb = 0.0; let cc = 0.0; let cd = 1.0
+            if (flags & 8) != 0 { ca = Float(i16(data, position)) / 16384.0; cd = ca; position += 2 }
+            else if (flags & 64) != 0 { ca = Float(i16(data, position)) / 16384.0; cd = Float(i16(data, position + 2)) / 16384.0; position += 4 }
+            else if (flags & 128) != 0 { ca = Float(i16(data, position)) / 16384.0; cb = Float(i16(data, position + 2)) / 16384.0; cc = Float(i16(data, position + 4)) / 16384.0; cd = Float(i16(data, position + 6)) / 16384.0; position += 8 }
+            let dx = Float(x); let dy = Float(y)
+            if (flags & 2048) != 0 { dx = ca * Float(x) + cc * Float(y); dy = cb * Float(x) + cd * Float(y) }
+            glyphOutline(font, component, a * ca + c * cb, b * ca + d * cb, a * cc + c * cd, b * cc + d * cd, a * dx + c * dy + tx, b * dx + d * dy + ty, result, depth + 1)
+            more = (flags & 32) != 0
+        }
+        return
+    }
+    if contours < 0 || contours > 1024 { fail("paint: excessive TrueType contour count") }
+    if contours == 0 { return }
+    let ends: List<Integer> = []
+    for contour in 0..contours { ends.add(u16(data, position)); position += 2 }
+    let count = ends[contours - 1] + 1
+    let instructions = u16(data, position); position += 2 + instructions
+    let flags: List<Integer> = []
+    while flags.length < count {
+        let flag = data[position]; position += 1; flags.add(flag)
+        if (flag & 8) != 0 {
+            let repeated = data[position]; position += 1
+            for index in 0..repeated { flags.add(flag) }
+        }
+        if flags.length > count { fail("paint: invalid TrueType point flags") }
+    }
+    let xs: List<Integer> = []; let ys: List<Integer> = []; let x = 0; let y = 0
+    for flag in flags {
+        if (flag & 2) != 0 { let delta = data[position]; position += 1; if (flag & 16) == 0 { delta = -delta }; x += delta }
+        else if (flag & 16) == 0 { x += i16(data, position); position += 2 }
+        xs.add(x)
+    }
+    for flag in flags {
+        if (flag & 4) != 0 { let delta = data[position]; position += 1; if (flag & 32) == 0 { delta = -delta }; y += delta }
+        else if (flag & 32) == 0 { y += i16(data, position); position += 2 }
+        ys.add(y)
+    }
+    if position > font.glyf + nextOffset { fail("paint: truncated TrueType glyph points") }
+    let points: List<Point> = []
+    for index in 0..count { let px = Float(xs[index]); let py = Float(ys[index]); points.add(Point { x: a * px + c * py + tx; y: b * px + d * py + ty; on: (flags[index] & 1) != 0 }) }
+    let first = 0
+    for end in ends { if end < first || end >= count { fail("paint: invalid TrueType contour endpoints") }; drawContour(result, points, first, end); first = end + 1 }
+}
+public function width(font: Font, text: Text, size: Float): Float {
+    let units = 0
+    for character in text { let glyph = glyphIndex(font, Integer(character)); if glyph >= font.glyphs { fail("paint: cmap references a missing glyph") }; units += advance(font, glyph) }
+    return Float(units) * size / Float(font.units)
+}
+public function outline(font: Font, text: Text, x: Float, y: Float, size: Float): Outline {
+    if text.length > 10000 || !(size > 0.0 && size <= 10000.0) { fail("paint: text must be at most 10000 characters and size 0..10000") }
+    let result = Outline { codes: []; xs: []; ys: []; controlXs: []; controlYs: [] }; let pen = 0.0
+    for character in text {
+        let glyph = glyphIndex(font, Integer(character))
+        glyphOutline(font, glyph, 1.0, 0.0, 0.0, 1.0, pen, 0.0, result, 0)
+        pen += Float(advance(font, glyph))
+    }
+    let scale = size / Float(font.units)
+    for index in 0..result.codes.length { result.xs[index] = x + result.xs[index] * scale; result.ys[index] = y - result.ys[index] * scale; result.controlXs[index] = x + result.controlXs[index] * scale; result.controlYs[index] = y - result.controlYs[index] * scale }
+    return result
+}

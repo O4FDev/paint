@@ -1,0 +1,23 @@
+{
+  "after-rain": {
+    "size": [
+      1080,
+      720
+    ],
+    "rgba_sha256": "e190682af3e0beeda04dc360ddd82a8c6ebe8fdc553d79510cc1a6ff42852cbb"
+  },
+  "tidal": {
+    "size": [
+      720,
+      900
+    ],
+    "rgba_sha256": "1fc4a746480fbb0ab56c8e4d80e6c5b4d1c9be3b529a98e40b8607389d496bd4"
+  },
+  "bloom": {
+    "size": [
+      720,
+      900
+    ],
+    "rgba_sha256": "4b4f7935e79793ee1eff7b9ed49589eb9a42da66b54bbec942db81ad5088c0d9"
+  }
+}

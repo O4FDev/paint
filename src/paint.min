@@ -1,0 +1,231 @@
+// Paint is a portable vector studio. All geometry, coverage and PNG coding is
+// ordinary Minyar; only standard math and file I/O cross into the toolchain.
+use "math" as math
+use "io" as io
+use "./png.min" as png
+use "./truetype.min" as truetype
+
+public record Color { red: Float; green: Float; blue: Float; alpha: Float }
+public record Gradient { first: Color; last: Color; x0: Float; y0: Float; x1: Float; y1: Float }
+public record Path { private xs: List<Float>; private ys: List<Float>; private starts: List<Integer>; private commands: List<Text> }
+public record Canvas { width: Integer; height: Integer; private samples: Integer; private pixels: Bytes; private elements: List<Text>; private definitions: List<Text> }
+
+public function rgba(red: Float, green: Float, blue: Float, alpha: Float): Color {
+    return Color { red: clamp(red, 0.0, 1.0); green: clamp(green, 0.0, 1.0); blue: clamp(blue, 0.0, 1.0); alpha: clamp(alpha, 0.0, 1.0) }
+}
+public function rgb(hex: Integer): Color { return rgba(Float((hex >> 16) & 255) / 255.0, Float((hex >> 8) & 255) / 255.0, Float(hex & 255) / 255.0, 1.0) }
+public function opacity(color: Color, amount: Float): Color { return rgba(color.red, color.green, color.blue, color.alpha * amount) }
+public function linear(x0: Float, y0: Float, x1: Float, y1: Float, first: Color, last: Color): Gradient { return Gradient { first: first; last: last; x0: x0; y0: y0; x1: x1; y1: y1 } }
+public function canvasWithSamples(width: Integer, height: Integer, samples: Integer): Canvas {
+    if width < 1 || height < 1 || width > 4096 || height > 4096 || samples < 1 || samples > 4 { fail("paint: canvas dimensions must be 1..4096, samples 1..4") }
+    if width * height * samples * samples > 16777216 { fail("paint: supersampled canvas exceeds 16 million pixels") }
+    return Canvas { width: width; height: height; samples: samples; pixels: Bytes(width * height * samples * samples * 4); elements: []; definitions: [] }
+}
+public function canvas(width: Integer, height: Integer): Canvas { return canvasWithSamples(width, height, 3) }
+public function path(): Path { return Path { xs: []; ys: []; starts: []; commands: [] } }
+function startsContour(path: Path, index: Integer): Boolean {
+    for first in path.starts { if first == index { return true } }
+    return false
+}
+function point(path: Path, x: Float, y: Float) {
+    if !(x >= -10000000.0 && x <= 10000000.0 && y >= -10000000.0 && y <= 10000000.0) { fail("paint: path coordinates must be finite and within ten million units") }
+    path.xs.add(x); path.ys.add(y)
+}
+public function moveTo(path: Path, x: Float, y: Float) { path.starts.add(path.xs.length); point(path, x, y); path.commands.add("M" + Text(x) + " " + Text(y)) }
+public function lineTo(path: Path, x: Float, y: Float) {
+    if path.starts.length == 0 { fail("paint: moveTo must start a path") }
+    point(path, x, y); path.commands.add("L" + Text(x) + " " + Text(y))
+}
+function flatten(path: Path, x0: Float, y0: Float, x1: Float, y1: Float, x2: Float, y2: Float, x3: Float, y3: Float, depth: Integer) {
+    let dx = x3 - x0
+    let dy = y3 - y0
+    let a = abs((x1 - x3) * dy - (y1 - y3) * dx)
+    let b = abs((x2 - x3) * dy - (y2 - y3) * dx)
+    if depth >= 12 || ((a + b) * (a + b) <= 0.015625 * (dx * dx + dy * dy) && abs(x0 - 2.0 * x1 + x2) + abs(y0 - 2.0 * y1 + y2) + abs(x1 - 2.0 * x2 + x3) + abs(y1 - 2.0 * y2 + y3) < 1.0) { point(path, x3, y3); return }
+    let ax = (x0 + x1) * 0.5; let ay = (y0 + y1) * 0.5
+    let bx = (x1 + x2) * 0.5; let by = (y1 + y2) * 0.5
+    let cx = (x2 + x3) * 0.5; let cy = (y2 + y3) * 0.5
+    let dx0 = (ax + bx) * 0.5; let dy0 = (ay + by) * 0.5
+    let ex = (bx + cx) * 0.5; let ey = (by + cy) * 0.5
+    let fx = (dx0 + ex) * 0.5; let fy = (dy0 + ey) * 0.5
+    flatten(path, x0, y0, ax, ay, dx0, dy0, fx, fy, depth + 1)
+    flatten(path, fx, fy, ex, ey, cx, cy, x3, y3, depth + 1)
+}
+public function cubicTo(path: Path, x1: Float, y1: Float, x2: Float, y2: Float, x: Float, y: Float) {
+    if path.xs.length == 0 { fail("paint: moveTo must precede cubicTo") }
+    let index = path.xs.length - 1
+    flatten(path, path.xs[index], path.ys[index], x1, y1, x2, y2, x, y, 0)
+    path.commands.add("C" + Text(x1) + " " + Text(y1) + " " + Text(x2) + " " + Text(y2) + " " + Text(x) + " " + Text(y))
+}
+public function quadraticTo(path: Path, controlX: Float, controlY: Float, x: Float, y: Float) {
+    if path.xs.length == 0 { fail("paint: moveTo must precede quadraticTo") }
+    let index = path.xs.length - 1
+    cubicTo(path, path.xs[index] + (controlX - path.xs[index]) * 2.0 / 3.0, path.ys[index] + (controlY - path.ys[index]) * 2.0 / 3.0, x + (controlX - x) * 2.0 / 3.0, y + (controlY - y) * 2.0 / 3.0, x, y)
+}
+public function close(path: Path) {
+    if path.starts.length == 0 { fail("paint: cannot close an empty path") }
+    let first = path.starts[path.starts.length - 1]
+    point(path, path.xs[first], path.ys[first]); path.commands.add("Z")
+}
+public function rectangle(x: Float, y: Float, width: Float, height: Float): Path {
+    let result = path(); moveTo(result, x, y); lineTo(result, x + width, y); lineTo(result, x + width, y + height); lineTo(result, x, y + height); close(result); return result
+}
+public function circle(x: Float, y: Float, radius: Float): Path {
+    if radius < 0.0 { fail("paint: circle radius must be nonnegative") }
+    let result = path(); let k = radius * 0.5522847498307936
+    moveTo(result, x + radius, y)
+    cubicTo(result, x + radius, y + k, x + k, y + radius, x, y + radius)
+    cubicTo(result, x - k, y + radius, x - radius, y + k, x - radius, y)
+    cubicTo(result, x - radius, y - k, x - k, y - radius, x, y - radius)
+    cubicTo(result, x + k, y - radius, x + radius, y - k, x + radius, y)
+    close(result); return result
+}
+public function transformed(source: Path, a: Float, b: Float, c: Float, d: Float, x: Float, y: Float): Path {
+    let result = path()
+    for index in 0..source.xs.length {
+        let px = a * source.xs[index] + c * source.ys[index] + x
+        let py = b * source.xs[index] + d * source.ys[index] + y
+        if startsContour(source, index) { moveTo(result, px, py) } else { lineTo(result, px, py) }
+    }
+    return result
+}
+function byte(value: Float): Integer { return Integer(clamp(value * 255.0 + 0.5, 0.0, 255.0)) }
+function colorText(color: Color): Text { return "rgb(" + Text(byte(color.red)) + "," + Text(byte(color.green)) + "," + Text(byte(color.blue)) + ")" }
+function blend(canvas: Canvas, x: Integer, y: Integer, color: Color) {
+    let index = (y * canvas.width * canvas.samples + x) * 4
+    let alpha = color.alpha
+    let remaining = Float(canvas.pixels[index + 3]) / 255.0 * (1.0 - alpha)
+    let total = alpha + remaining
+    if total <= 0.0 { return }
+    canvas.pixels[index] = byte((color.red * alpha + Float(canvas.pixels[index]) / 255.0 * remaining) / total)
+    canvas.pixels[index + 1] = byte((color.green * alpha + Float(canvas.pixels[index + 1]) / 255.0 * remaining) / total)
+    canvas.pixels[index + 2] = byte((color.blue * alpha + Float(canvas.pixels[index + 2]) / 255.0 * remaining) / total)
+    canvas.pixels[index + 3] = byte(total)
+}
+function shade(gradient: Gradient, x: Float, y: Float): Color {
+    let dx = gradient.x1 - gradient.x0; let dy = gradient.y1 - gradient.y0
+    let length = dx * dx + dy * dy
+    let t = 0.0
+    if length > 0.0 { t = clamp(((x - gradient.x0) * dx + (y - gradient.y0) * dy) / length, 0.0, 1.0) }
+    let a = gradient.first; let b = gradient.last
+    return rgba(a.red + (b.red - a.red) * t, a.green + (b.green - a.green) * t, a.blue + (b.blue - a.blue) * t, a.alpha + (b.alpha - a.alpha) * t)
+}
+function fillPixels(canvas: Canvas, path: Path, gradient: Gradient) {
+    if path.xs.length < 3 { return }
+    let low = path.ys[0]; let high = low
+    for y in path.ys { low = min(low, y); high = max(high, y) }
+    let scale = Float(canvas.samples)
+    let firstRow = Integer(clamp(math.ceil(low * scale - 0.5), 0.0, Float(canvas.height * canvas.samples)))
+    let lastRow = Integer(clamp(math.ceil(high * scale - 0.5), 0.0, Float(canvas.height * canvas.samples)))
+    for row in firstRow..lastRow {
+        let y = (Float(row) + 0.5) / scale
+        let crossings: List<Float> = []
+        for contour in 0..path.starts.length {
+            let start = path.starts[contour]; let end = path.xs.length
+            if contour + 1 < path.starts.length { end = path.starts[contour + 1] }
+            let previous = end - 1
+            for current in start..end {
+                let y0 = path.ys[previous]; let y1 = path.ys[current]
+                if (y0 <= y && y1 > y) || (y1 <= y && y0 > y) { crossings.add(path.xs[previous] + (y - y0) / (y1 - y0) * (path.xs[current] - path.xs[previous])) }
+                previous = current
+            }
+        }
+        crossings.sort()
+        let pair = 0
+        while pair + 1 < crossings.length {
+            let left = Integer(clamp(math.ceil(crossings[pair] * scale - 0.5), 0.0, Float(canvas.width * canvas.samples)))
+            let right = Integer(clamp(math.ceil(crossings[pair + 1] * scale - 0.5), 0.0, Float(canvas.width * canvas.samples)))
+            for x in left..right { blend(canvas, x, row, shade(gradient, (Float(x) + 0.5) / scale, y)) }
+            pair += 2
+        }
+    }
+}
+function pathText(path: Path): Text { return joinText(path.commands) }
+public function fill(canvas: Canvas, path: Path, color: Color) {
+    fillPixels(canvas, path, linear(0.0, 0.0, 0.0, 0.0, color, color))
+    canvas.elements.add("<path d=\"" + pathText(path) + "\" fill=\"" + colorText(color) + "\" fill-opacity=\"" + Text(color.alpha) + "\" fill-rule=\"evenodd\"/>")
+}
+public function fillGradient(canvas: Canvas, path: Path, gradient: Gradient) {
+    fillPixels(canvas, path, gradient)
+    let name = "ink" + Text(canvas.definitions.length)
+    canvas.definitions.add("<linearGradient id=\"" + name + "\" gradientUnits=\"userSpaceOnUse\" x1=\"" + Text(gradient.x0) + "\" y1=\"" + Text(gradient.y0) + "\" x2=\"" + Text(gradient.x1) + "\" y2=\"" + Text(gradient.y1) + "\"><stop stop-color=\"" + colorText(gradient.first) + "\" stop-opacity=\"" + Text(gradient.first.alpha) + "\"/><stop offset=\"1\" stop-color=\"" + colorText(gradient.last) + "\" stop-opacity=\"" + Text(gradient.last.alpha) + "\"/></linearGradient>")
+    canvas.elements.add("<path d=\"" + pathText(path) + "\" fill=\"url(#" + name + ")\" fill-rule=\"evenodd\"/>")
+}
+public function clear(canvas: Canvas, color: Color) {
+    canvas.elements.clear(); canvas.definitions.clear()
+    let red = byte(color.red); let green = byte(color.green); let blue = byte(color.blue); let alpha = byte(color.alpha)
+    let index = 0
+    while index < canvas.pixels.length {
+        canvas.pixels[index] = red; canvas.pixels[index + 1] = green; canvas.pixels[index + 2] = blue; canvas.pixels[index + 3] = alpha; index += 4
+    }
+    canvas.elements.add("<rect width=\"100%\" height=\"100%\" fill=\"" + colorText(color) + "\" fill-opacity=\"" + Text(color.alpha) + "\"/>")
+}
+function strokeSegment(canvas: Canvas, x0: Float, y0: Float, x1: Float, y1: Float, radius: Float, color: Color) {
+    let scale = Float(canvas.samples); let width = canvas.width * canvas.samples; let height = canvas.height * canvas.samples
+    let left = Integer(clamp(math.floor((min(x0, x1) - radius) * scale), 0.0, Float(width)))
+    let right = Integer(clamp(math.ceil((max(x0, x1) + radius) * scale), 0.0, Float(width)))
+    let top = Integer(clamp(math.floor((min(y0, y1) - radius) * scale), 0.0, Float(height)))
+    let bottom = Integer(clamp(math.ceil((max(y0, y1) + radius) * scale), 0.0, Float(height)))
+    let dx = x1 - x0; let dy = y1 - y0; let length = dx * dx + dy * dy
+    for y in top..bottom {
+        for x in left..right {
+            let px = (Float(x) + 0.5) / scale; let py = (Float(y) + 0.5) / scale
+            let t = 0.0
+            if length > 0.0 { t = clamp(((px - x0) * dx + (py - y0) * dy) / length, 0.0, 1.0) }
+            let ex = px - x0 - t * dx; let ey = py - y0 - t * dy
+            if ex * ex + ey * ey <= radius * radius { blend(canvas, x, y, color) }
+        }
+    }
+}
+public function stroke(canvas: Canvas, path: Path, width: Float, color: Color) {
+    if !(width > 0.0 && width <= 10000.0) { fail("paint: stroke width must be positive and at most 10000") }
+    // Draw coverage once per stroke so translucent overlapping segments do not
+    // darken at joins. The mask is then composited in a single pass.
+    let mask = canvasWithSamples(canvas.width, canvas.height, canvas.samples)
+    let white = rgb(0xffffff)
+    for index in 1..path.xs.length {
+        if !startsContour(path, index) { strokeSegment(mask, path.xs[index - 1], path.ys[index - 1], path.xs[index], path.ys[index], width * 0.5, white) }
+    }
+    let pixels = canvas.width * canvas.samples
+    for y in 0..(canvas.height * canvas.samples) {
+        for x in 0..pixels { if mask.pixels[(y * pixels + x) * 4 + 3] != 0 { blend(canvas, x, y, color) } }
+    }
+    canvas.elements.add("<path d=\"" + pathText(path) + "\" fill=\"none\" stroke=\"" + colorText(color) + "\" stroke-opacity=\"" + Text(color.alpha) + "\" stroke-width=\"" + Text(width) + "\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>")
+}
+public function pixels(canvas: Canvas): Bytes {
+    let output = Bytes(canvas.width * canvas.height * 4)
+    let samples = canvas.samples; let count = samples * samples
+    for y in 0..canvas.height {
+        for x in 0..canvas.width {
+            let red = 0; let green = 0; let blue = 0; let alpha = 0
+            for sy in 0..samples { for sx in 0..samples {
+                let index = ((y * samples + sy) * canvas.width * samples + x * samples + sx) * 4
+                let a = canvas.pixels[index + 3]
+                red += canvas.pixels[index] * a; green += canvas.pixels[index + 1] * a; blue += canvas.pixels[index + 2] * a; alpha += a
+            } }
+            let destination = (y * canvas.width + x) * 4
+            if alpha > 0 { output[destination] = (red + alpha / 2) / alpha; output[destination + 1] = (green + alpha / 2) / alpha; output[destination + 2] = (blue + alpha / 2) / alpha }
+            output[destination + 3] = (alpha + count / 2) / count
+        }
+    }
+    return output
+}
+public function pngBytes(canvas: Canvas): Bytes { return png.encode(canvas.width, canvas.height, pixels(canvas)) }
+public function writePng(canvas: Canvas, path: Text) { io.writeBytesFile(path, pngBytes(canvas)) }
+public function svg(canvas: Canvas): Text { return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" + Text(canvas.width) + "\" height=\"" + Text(canvas.height) + "\" viewBox=\"0 0 " + Text(canvas.width) + " " + Text(canvas.height) + "\"><defs>" + joinText(canvas.definitions) + "</defs>" + joinText(canvas.elements) + "</svg>\n" }
+public function writeSvg(canvas: Canvas, path: Text) { io.writeTextFile(path, svg(canvas)) }
+public function loadFont(path: Text): truetype.Font { return truetype.load(path) }
+public function textWidth(font: truetype.Font, text: Text, size: Float): Float { return truetype.width(font, text, size) }
+public function textPath(font: truetype.Font, text: Text, x: Float, baseline: Float, size: Float): Path {
+    let outline = truetype.outline(font, text, x, baseline, size)
+    let result = path()
+    for index in 0..outline.codes.length {
+        let code = outline.codes[index]; let px = outline.xs[index]; let py = outline.ys[index]
+        if code == 0 { moveTo(result, px, py) }
+        else if code == 1 { lineTo(result, px, py) }
+        else if code == 2 { quadraticTo(result, outline.controlXs[index], outline.controlYs[index], px, py) }
+        else { close(result) }
+    }
+    return result
+}
+public function text(canvas: Canvas, font: truetype.Font, words: Text, x: Float, baseline: Float, size: Float, color: Color) { fill(canvas, textPath(font, words, x, baseline, size), color) }
