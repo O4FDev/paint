@@ -1,5 +1,11 @@
 # paint
 
+> [!WARNING]
+> **Test repository — not for use.** This is an experimental package used to
+> test installing Minyar packages from GitHub. It is unmaintained, has no
+> stability guarantees, and may be rewritten, force-pushed or deleted at any
+> time. Please don't depend on it.
+
 A small vector studio, written in Minyar. Paths become pictures. The same
 geometry produces antialiased PNGs and editable, self-contained SVGs.
 
@@ -9,8 +15,7 @@ geometry produces antialiased PNGs and editable, self-contained SVGs.
 minyar add github.com/O4FDev/paint@v0.1.0
 ```
 
-The repository is prepared locally for `github.com/O4FDev/paint`; it has not
-been published. See the unpublished-install instructions below until it is.
+The `v0.1.0` tag is the tested release; `main` adds only this test notice.
 
 ```minyar
 use "paint" as paint
@@ -85,7 +90,7 @@ The gallery's expected pixel digests accompany an independent standard-library
 PNG decoder. Tests cover compositing, coverage, holes, stroke joins, TrueType
 metrics/composites and generated PNG framing. Examples do not access the network.
 
-## Install before publication
+## Install offline from a local mirror
 
 Create a private bare mirror and keep the GitHub-shaped import:
 
@@ -101,15 +106,7 @@ No global Git configuration or remote is changed. The manifest and content lock
 record the final GitHub path, ready for publication. Consumers need Minyar with
 Git dependency support.
 
-## Publish later
+## Licence
 
-Luke can create the public repository and push the already-tested main branch
-and `v0.1.0` tag with this single command:
-
-```sh
-MINYAR_CONFIRM_PUBLISH=github.com/O4FDev/paint sh scripts/publish.sh
-```
-
-That script has not been run. It requires GitHub CLI authentication and an
-explicit destination match. Package code and artwork are MIT licensed; the
-unmodified bundled font remains under OFL 1.1.
+Package code and artwork are MIT licensed; the unmodified bundled font remains
+under OFL 1.1.
